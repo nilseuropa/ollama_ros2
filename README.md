@@ -41,3 +41,4 @@ Notes
 -----
 - The node uses Python stdlib `urllib` to avoid extra dependencies.
 - Switch to `/api/chat` if you prefer chat-style prompts and roles.
+- On startup, the node queries Ollama for available models (`/api/tags`). If the configured `model` is not found, it selects the first available model (and updates the `model` parameter accordingly). It also attempts to match bare names to tagged variants (e.g., `llama3.2` -> `llama3.2:latest`).

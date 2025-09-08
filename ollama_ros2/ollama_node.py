@@ -4,6 +4,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from std_msgs.msg import String
 
 try:
@@ -40,12 +41,30 @@ class OllamaBridge(Node):
             String, input_topic, self._on_input, 10
         )
 
+        # Resolve and possibly adjust the model parameter based on Ollama availability
+        try:
+            configured_model = self.get_parameter('model').get_parameter_value().string_value
+            effective_model = self._resolve_model(configured_model)
+            self._model = effective_model
+            if effective_model != configured_model:
+                # Update the parameter so external queries reflect the effective model
+                self.set_parameters([Parameter('model', value=effective_model)])
+                self.get_logger().warn(
+                    f"Requested model '{configured_model}' not available; using '{effective_model}'."
+                )
+        except Exception as e:
+            # If resolution fails (e.g., Ollama unavailable), proceed with configured model
+            self._model = self.get_parameter('model').get_parameter_value().string_value
+            self.get_logger().warn(
+                f"Could not resolve models from Ollama: {e}. Proceeding with '{self._model}'."
+            )
+
         self.get_logger().info(
             f"OllamaBridge ready: subscribing '{input_topic}', publishing '{output_topic}'."
         )
         # Log effective key parameters to avoid confusion when launch files override defaults
         self.get_logger().info(
-            f"Configured endpoint='{self.get_parameter('endpoint').value}', model='{self.get_parameter('model').value}'."
+            f"Configured endpoint='{self.get_parameter('endpoint').value}', model='{self._model}'."
         )
 
     def _on_input(self, msg: String) -> None:
@@ -71,7 +90,7 @@ class OllamaBridge(Node):
     def _query_ollama(self, prompt: str) -> str:
         api_url = self.get_parameter('api_url').get_parameter_value().string_value.rstrip('/')
         endpoint = self.get_parameter('endpoint').get_parameter_value().string_value
-        model = self.get_parameter('model').get_parameter_value().string_value
+        model = getattr(self, '_model', None) or self.get_parameter('model').get_parameter_value().string_value
         stream = self.get_parameter('stream').get_parameter_value().bool_value
         timeout_sec = self.get_parameter('timeout_sec').get_parameter_value().double_value
         temperature = self.get_parameter('temperature').get_parameter_value().double_value
@@ -147,7 +166,47 @@ class OllamaBridge(Node):
                     responses.append(part['response'])
                 elif 'message' in part and isinstance(part['message'], dict):
                     responses.append(part['message'].get('content', ''))
-            return ''.join(responses)
+        return ''.join(responses)
+
+    def _resolve_model(self, requested: str) -> str:
+        """Return an available model name.
+
+        If the requested model is not available, choose the first available.
+        Tries to match requested name without tag to a tagged model (e.g., 'llama3.2' -> 'llama3.2:latest').
+        Raises RuntimeError if no models are available from Ollama.
+        """
+        api_url = self.get_parameter('api_url').get_parameter_value().string_value.rstrip('/')
+        tags_url = f"{api_url}/api/tags"
+
+        req = _urllib_request.Request(tags_url, headers={'Accept': 'application/json'})
+        try:
+            with _urllib_request.urlopen(req, timeout=10.0) as resp:
+                raw = resp.read()
+        except _urllib_error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='ignore') if hasattr(e, 'read') else ''
+            raise RuntimeError(f"HTTP {e.code} from Ollama tags: {body}") from e
+        except _urllib_error.URLError as e:
+            raise RuntimeError(f"Failed to reach Ollama at {tags_url}: {e}") from e
+
+        data = json.loads(raw.decode('utf-8', errors='ignore'))
+        models = data.get('models', [])
+        names = [m.get('name') for m in models if isinstance(m, dict) and m.get('name')]
+
+        if not names:
+            raise RuntimeError('No models available from Ollama.')
+
+        # Exact match
+        if requested in names:
+            return requested
+
+        # If user omitted tag, try to find a tagged variant like ':latest'
+        if ':' not in requested:
+            for n in names:
+                if n.startswith(requested + ':'):
+                    return n
+
+        # Fallback to first available
+        return names[0]
 
 
 def main(args: Optional[list] = None) -> None:

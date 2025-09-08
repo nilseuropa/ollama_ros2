@@ -12,7 +12,7 @@ def generate_launch_description():
             parameters=[
                 {'api_url': 'http://127.0.0.1:11434'},
                 {'endpoint': '/api/generate'},  # or '/api/chat'
-                {'model': 'llama3.2'},
+                {'model': 'krumpli'},
                 {'stream': False},
                 {'timeout_sec': 120.0},
                 {'temperature': 0.7},
