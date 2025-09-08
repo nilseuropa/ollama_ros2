@@ -20,6 +20,8 @@ Parameters
 - system_prompt (string): Optional system prompt (default empty)
 - input_topic (string): Input topic name (default `input`)
 - output_topic (string): Output topic name (default `output`)
+- enable_tts (bool): If true, sends the response to a TTS action (default false)
+- tts_action_name (string): Action name for TTS (default `/say`)
 
 Build & Run
 -----------
@@ -36,6 +38,8 @@ Build & Run
 4. Interact via topics:
    - `ros2 topic pub /input std_msgs/String "data: 'Write a haiku about robots.'" -1`
    - `ros2 topic echo /output`
+   - Enable TTS: `ros2 launch ollama_ros2 ollama_node.launch.py enable_tts:=true`
+     - or: `ros2 run ollama_ros2 ollama_node --ros-args -p enable_tts:=true -p tts_action_name:=/say`
 
 Notes
 -----

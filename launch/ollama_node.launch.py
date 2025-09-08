@@ -20,6 +20,8 @@ def generate_launch_description():
                 {'system_prompt': ''},
                 {'input_topic': 'input'},
                 {'output_topic': 'output'},
+                {'enable_tts': True},
+                {'tts_action_name': '/say'},
             ],
         )
     ])

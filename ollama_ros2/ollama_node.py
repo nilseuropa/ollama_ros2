@@ -4,8 +4,10 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 from rclpy.parameter import Parameter
 from std_msgs.msg import String
+from audio_common_msgs.action import TTS
 
 try:
     # Prefer stdlib to avoid external deps
@@ -31,6 +33,8 @@ class OllamaBridge(Node):
         self.declare_parameter('system_prompt', '')
         self.declare_parameter('input_topic', 'input')
         self.declare_parameter('output_topic', 'output')
+        self.declare_parameter('enable_tts', False)
+        self.declare_parameter('tts_action_name', '/say')
 
         input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         output_topic = self.get_parameter('output_topic').get_parameter_value().string_value
@@ -40,6 +44,14 @@ class OllamaBridge(Node):
         self.subscription = self.create_subscription(
             String, input_topic, self._on_input, 10
         )
+
+        # Optional TTS action client
+        self._enable_tts = self.get_parameter('enable_tts').get_parameter_value().bool_value
+        self._tts_action_name = self.get_parameter('tts_action_name').get_parameter_value().string_value
+        self._tts_client: ActionClient | None = None
+        if self._enable_tts:
+            self._tts_client = ActionClient(self, TTS, self._tts_action_name)
+            self.get_logger().info(f"TTS enabled; action server: '{self._tts_action_name}'")
 
         # Resolve and possibly adjust the model parameter based on Ollama availability
         try:
@@ -86,6 +98,9 @@ class OllamaBridge(Node):
         out = String()
         out.data = response_text
         self.publisher_.publish(out)
+        # Optionally speak via TTS action
+        if self._enable_tts and self._tts_client is not None:
+            self._send_tts_goal(response_text)
 
     def _query_ollama(self, prompt: str) -> str:
         api_url = self.get_parameter('api_url').get_parameter_value().string_value.rstrip('/')
@@ -166,7 +181,39 @@ class OllamaBridge(Node):
                     responses.append(part['response'])
                 elif 'message' in part and isinstance(part['message'], dict):
                     responses.append(part['message'].get('content', ''))
-        return ''.join(responses)
+            return ''.join(responses)
+
+    def _send_tts_goal(self, text: str) -> None:
+        try:
+            if not self._tts_client:
+                self.get_logger().warn('TTS client not initialized.')
+                return
+            if not self._tts_client.server_is_ready():
+                self.get_logger().warn(f"TTS action server '{self._tts_action_name}' not ready.")
+                return
+            goal = TTS.Goal()
+            goal.text = text
+            send_future = self._tts_client.send_goal_async(goal)
+
+            def _accepted_cb(fut):
+                goal_handle = fut.result()
+                if not goal_handle.accepted:
+                    self.get_logger().warn('TTS goal rejected.')
+                    return
+                result_future = goal_handle.get_result_async()
+
+                def _result_cb(res_fut):
+                    try:
+                        _ = res_fut.result()
+                        # No need to publish anything; this is just side-effect
+                    except Exception as e:
+                        self.get_logger().warn(f"TTS result error: {e}")
+
+                result_future.add_done_callback(_result_cb)
+
+            send_future.add_done_callback(_accepted_cb)
+        except Exception as e:
+            self.get_logger().warn(f"Failed to send TTS goal: {e}")
 
     def _resolve_model(self, requested: str) -> str:
         """Return an available model name.
